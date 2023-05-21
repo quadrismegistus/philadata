@@ -3,3 +3,4 @@ venv
 .ipython_checkpoints
 .DS_Store
 bak
+data

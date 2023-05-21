@@ -1,51 +1,7 @@
-##################################################
-# IMPORTS
-##################################################
-
-## Constants
-TITLE = 'Philadata'
-
-## Sys imports
-import warnings
-warnings.filterwarnings('ignore')
-from datetime import datetime as dt
-import os,sys,copy,time
-
-## Non-sys imports
-import dash
-import dash_mantine_components as dmc
-import dash_bootstrap_components as dbc
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-import numpy as np
-import pandas as pd
-from dash import Dash, dcc, html, Input, Output, State, dash_table, callback, ctx
-import pandas_dash
-from functools import lru_cache, cached_property
-
-from app_toolbox import *
 from philadata import *
+from app_toolbox import *
 
-from dash_oop_components import DashFigureFactory, DashComponent, DashComponentTabs, DashApp
-
-## Setup plotly
-# Plotly mapbox public token
-mapbox_access_token = open(os.path.expanduser('~/.mapbox_token')).read()
-px.set_mapbox_access_token(mapbox_access_token)
-px.defaults.template='plotly_dark'
-
-
-def is_l(x): return type(x) in {list,tuple}
-def iter_minmaxs(l):
-    if is_l(l):
-        for x in l:
-            if is_l(x):
-                if len(x)==2 and not is_l(x[0]) and not is_l(x[1]):
-                    yield x
-                else:
-                    yield from iter_minmaxs(x)
+PREC_ID='prec_20'
 
 
 class PhilaPlots(DashFigureFactory):
@@ -61,6 +17,7 @@ class PhilaPlots(DashFigureFactory):
             df = self.df.sample(frac=1)
             ql=[]
             for k,v in filter_data.items():
+                q=''
                 if is_l(v):
                     q = ' | '.join(
                         f'({minv}<={k}<={maxv})'
@@ -68,7 +25,7 @@ class PhilaPlots(DashFigureFactory):
                     )
                 elif type(v)==str:
                     q=f'{k}=="{v}"'
-                ql.append(f'({q})')
+                if q: ql.append(f'({q})')
             q=' & '.join(ql)
             df = df.query(q) if q else df
             ff=PhilaPlots(df=df)
@@ -91,9 +48,28 @@ class PhilaPlots(DashFigureFactory):
     
     def plot_parcoords(self, cols=None):
         if not cols: cols=get_nonelectoral_cols()
-        return px.parallel_coordinates(
+        fig=px.parallel_coordinates(
             self.df[cols]
         )
+        # fig.update_traces(labelangle=-90)
+        # fig.update_xaxes(tickangle=-90)
+        # fig.update_yaxes(tickangle=-90)
+        return fig
+    
+    def plot_map(self, color='largest_race', mapbox_style='carto-positron',**kwargs):
+        fig=px.choropleth_mapbox(
+            self.df,
+            locations='prec_20',
+            geojson=get_geojson_warddiv(),
+            featureidkey='id',
+            color=color,
+            mapbox_style=mapbox_style,
+            center=get_center_lat_lon(),
+            height=800,
+            zoom=9
+        )
+        fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
+        return fig
     
     
 
@@ -148,9 +124,9 @@ class Philadata(DashComponent):
     ### GRAPHS
     
     @cached_property
-    def graph_biplot(self): return dcc.Graph()
+    def graph_map(self): return dcc.Graph(figure=self.ff.plot_map(), className='map')
     @cached_property
-    def graph_parcoord(self): return dcc.Graph(figure=self.ff.plot_parcoords())
+    def graph_parcoord(self): return dcc.Graph(figure=self.ff.plot_parcoords(), className='parcoord')
     @cached_property
     def desc_query(self): return html.Div()
 
@@ -160,29 +136,24 @@ class Philadata(DashComponent):
     ### LAYOUT
 
     def layout(self):
-        return dbc.Container(
+        return dbc.Container([
             dbc.Row([
-                dbc.Col(
-                    width=3,
-                    class_name='layout-col-left',
-                    children=[
-                        self.y_axis,
-                        self.x_axis,
-                        self.qual_col,
-                        self.filter_data
-                    ]
-                ),
-
-                dbc.Col(
-                    width=9,
-                    children=[
-                        self.graph_biplot,
-                        self.graph_parcoord,
-                        self.desc_query,
-                    ]
-                )
+                    self.y_axis,
+                    self.x_axis,
+                    self.qual_col,
+                    self.filter_data
+            ]
+            , style={'display':'none'}),
+            # dbc.Row([
+            dbc.Row([
+                self.graph_map,
             ]),
-        )
+            dbc.Row([
+                self.graph_parcoord,
+                self.desc_query,
+            ]),
+            # ])
+        ])
     
 
     ### CALLBACKS
@@ -193,7 +164,6 @@ class Philadata(DashComponent):
             State(self.filter_data, "data"),
         )
         def parcoord_filter_selected(restyledata, filter_data):
-            print('!?!?!/')
             if filter_data is None: filter_data = {}
             if restyledata and type(restyledata) is list:
                 for d in restyledata:
@@ -204,12 +174,11 @@ class Philadata(DashComponent):
                                 dim = self.graph_parcoord.figure.data[0].dimensions[dim_i]
                                 key = dim.label
                                 filter_data[key]=v
-            print(filter_data)
             return filter_data
 
         @app.callback(    
             [
-                Output(self.graph_biplot, "figure"),
+                Output(self.graph_map, "figure"),
                 Output(self.desc_query, "children"),
             ],
             [
@@ -217,20 +186,34 @@ class Philadata(DashComponent):
                 Input(self.x_axis,'value'),
                 Input(self.y_axis,'value'),
                 Input(self.qual_col,'value'),
+            ],
+            [
+                State(self.graph_map, 'figure')
             ]
         )
-        def graph_updated(filter_data, x_axis, y_axis, qual_col):
-            if filter_data is None: filter_data={}
+        def map_updated(filter_data, x_axis, y_axis, qual_col, mapfigdata):
+            if not filter_data: filter_data={}
+            for k,v in list(filter_data.items()):
+                if v is None:
+                    del filter_data[k]
+            
+            
             fff,qstr=self.ff.filter(filter_data, with_query=True)
+            selected_ids = list(fff.df[PREC_ID])
+            
+            fig=go.Figure(mapfigdata)
 
-            return (
-                fff.plot_biplot(
-                    x_axis=x_axis,
-                    y_axis=y_axis,
-                    qual_col=qual_col
-                ),
-                qstr
-            )
+            fig2=fff.plot_map(color=qual_col)
+            fig2.layout = fig.layout
+            # fig.data = fig2.data
+            return fig2, qstr
+            # orig_ids_map = tuple(sorted([d['id'] for d in fig.data[0].geojson['features']]))
+            
+            # fig.update_selections(locations=tuple(x for x in orig_ids_map if x in set(selected_ids)))
+
+            # print(filter_data, len(self.ff.df), len(fff.df), len(selected_ids), len(fig.data[0].locations), len(fig.data[0].geojson['features']))
+            
+            # return fig, qstr
 
     
 

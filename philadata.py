@@ -1,6 +1,39 @@
-import os
+## Constants
+TITLE = 'Philadata'
+
+## Sys imports
+import warnings
+warnings.filterwarnings('ignore')
+from datetime import datetime as dt
+import os,sys,copy,time
+import requests
+import json
+
+## Non-sys imports
 import pandas as pd
-from functools import lru_cache
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+import numpy as np
+import pandas as pd
+from functools import lru_cache, cached_property
+
+
+## Setup plotly
+# Plotly mapbox public token
+mapbox_access_token = open(os.path.expanduser('~/.mapbox_token')).read()
+px.set_mapbox_access_token(mapbox_access_token)
+px.defaults.template='plotly_dark'
+
+
+path_philadata_code=os.path.abspath(os.path.dirname(__file__))
+path_philadata_data=os.path.join(path_philadata_code,'data')
+if not os.path.exists(path_philadata_data): os.makedirs(path_philadata_data)
+
+
+URLS = {
+    'ward_divisions':'https://data-phl.opendata.arcgis.com/datasets/160a3665943d4864806d7b1399029a04_0.geojson'
+}
 
 
 
@@ -54,3 +87,47 @@ def get_nonelectoral_cols(quant=None):
 def get_qual_cols():
     o=set(precinct_data().select_dtypes(exclude='number').columns)
     return sorted(list(o))
+
+
+def is_l(x): return type(x) in {list,tuple}
+def iter_minmaxs(l):
+    if is_l(l):
+        for x in l:
+            if is_l(x):
+                if len(x)==2 and not is_l(x[0]) and not is_l(x[1]):
+                    yield x
+                else:
+                    yield from iter_minmaxs(x)
+
+
+
+
+def get_geojson_warddiv(fn='ward_divisions.geojson', force=False):
+    fn=os.path.join(path_philadata_data, fn) if not os.path.isabs(fn) else fn
+    url=URLS.get('ward_divisions')
+    if force or not os.path.exists(fn):
+        data = requests.get(url)
+        with open(fn,'wb') as of: 
+            of.write(data.content)
+
+    # load        
+    with open(fn) as f:
+        jsond=json.load(f)
+        
+    # anno
+    for d in jsond['features']:
+        d['id'] = str(d['properties']['DIVISION_NUM'])
+    
+    return jsond
+
+
+@lru_cache(maxsize=None)
+def get_center_lat_lon():
+    xl=[]
+    yl=[]
+    for d in get_geojson_warddiv()['features']:
+        for x,y in iter_minmaxs(d['geometry']['coordinates']):
+            xl.append(x)
+            yl.append(y)
+    center_lon,center_lat=np.median(xl),np.median(yl)
+    return {'lat':center_lat, 'lon':center_lon}

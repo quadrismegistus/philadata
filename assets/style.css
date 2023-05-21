@@ -99,6 +99,7 @@ div {
     margin:0;
     width:auto;
     height:auto;
+    /* display:flex; */
 }
 
 .chip {
@@ -116,4 +117,22 @@ div {
 
 .container {
     max-width: none;
+}
+
+
+
+.parcoord {
+    /* transform: rotate(90deg);
+    transform-origin: center; */
+    height:30vh;
+}
+.map {
+    height:70vh;
+}
+
+#_dash-app-content {
+    height:100vh;
+    width:100vw;
+    overflow:hidden
+    /* display:flex; */
 }
